@@ -139,13 +139,27 @@ public class ZipFileZip64IT extends AbstractIT {
 
   @Test
   public void testZip64WhenAddingFilesWithNewlyInstantiatedZipFile() throws IOException {
+    testZip64WhenAddingMultipleFiles(true);
+  }
+
+  @Test
+  public void testZip64WhenAddingFilesWithAlreadyInstantiatedZipFile() throws IOException {
+    testZip64WhenAddingMultipleFiles(false);
+  }
+
+  private void testZip64WhenAddingMultipleFiles(boolean reinitializeZipFile) throws IOException {
     File testFileToAdd = TestUtils.generateFileOfSize(temporaryFolder, 1073741824); // 1 GB
     ZipParameters zipParameters = new ZipParameters();
     zipParameters.setCompressionMethod(CompressionMethod.STORE);
+    ZipFile zipFile = new ZipFile(generatedZipFile);
 
     for (int i = 0; i < 6; i++) {
       zipParameters.setFileNameInZip(Integer.toString(i));
-      new ZipFile(generatedZipFile).addFile(testFileToAdd, zipParameters);
+
+      if (reinitializeZipFile) {
+        zipFile = new ZipFile(generatedZipFile);
+      }
+      zipFile.addFile(testFileToAdd, zipParameters);
     }
 
     ZipFileVerifier.verifyZipFileByExtractingAllFiles(generatedZipFile, null, outputFolder, 6, false);
@@ -154,7 +168,7 @@ public class ZipFileZip64IT extends AbstractIT {
   private void verifyZip64HeadersPresent() throws IOException {
     HeaderReader headerReader = new HeaderReader();
     ZipModel zipModel = headerReader.readAllHeaders(new RandomAccessFile(generatedZipFile,
-        RandomAccessFileMode.READ.getValue()), InternalZipConstants.CHARSET_UTF_8);
+        RandomAccessFileMode.READ.getValue()), buildDefaultConfig());
     assertThat(zipModel.getZip64EndOfCentralDirectoryLocator()).isNotNull();
     assertThat(zipModel.getZip64EndOfCentralDirectoryRecord()).isNotNull();
     assertThat(zipModel.isZip64Format()).isTrue();

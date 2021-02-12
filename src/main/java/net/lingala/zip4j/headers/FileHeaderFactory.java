@@ -9,6 +9,7 @@ import net.lingala.zip4j.model.enums.AesKeyStrength;
 import net.lingala.zip4j.model.enums.CompressionLevel;
 import net.lingala.zip4j.model.enums.CompressionMethod;
 import net.lingala.zip4j.model.enums.EncryptionMethod;
+import net.lingala.zip4j.util.FileUtils;
 import net.lingala.zip4j.util.InternalZipConstants;
 import net.lingala.zip4j.util.RawIO;
 import net.lingala.zip4j.util.Zip4jUtil;
@@ -60,9 +61,9 @@ public class FileHeaderFactory {
       fileHeader.setLastModifiedTime(Zip4jUtil.epochToExtendedDosTime(System.currentTimeMillis()));
     }
 
-    //For files added by this library, this attribute will be set after closeEntry is done
-    fileHeader.setExternalFileAttributes(new byte[4]);
-    fileHeader.setDirectory(isZipEntryDirectory(fileName));
+    boolean isDirectory = isZipEntryDirectory(fileName);
+    fileHeader.setDirectory(isDirectory);
+    fileHeader.setExternalFileAttributes(FileUtils.getDefaultFileAttributes(isDirectory));
 
     if (zipParameters.isWriteExtendedLocalFileHeader() && zipParameters.getEntrySize() == -1) {
       fileHeader.setUncompressedSize(0);
@@ -103,8 +104,9 @@ public class FileHeaderFactory {
   private byte[] determineGeneralPurposeBitFlag(boolean isEncrypted, ZipParameters zipParameters, Charset charset) {
     byte[] generalPurposeBitFlag = new byte[2];
     generalPurposeBitFlag[0] = generateFirstGeneralPurposeByte(isEncrypted, zipParameters);
-    if(charset.equals(InternalZipConstants.CHARSET_UTF_8)) {
-      generalPurposeBitFlag[1] = setBit(generalPurposeBitFlag[1], 3); // set 3rd bit which corresponds to utf-8 file name charset
+    if(charset == null || InternalZipConstants.CHARSET_UTF_8.equals(charset)) {
+      // set 3rd bit which corresponds to utf-8 file name charset
+      generalPurposeBitFlag[1] = setBit(generalPurposeBitFlag[1], 3);
     }
     return generalPurposeBitFlag;
   }
@@ -170,6 +172,6 @@ public class FileHeaderFactory {
   }
 
   private int determineFileNameLength(String fileName, Charset charset) {
-    return fileName.getBytes(charset).length;
+    return HeaderUtil.getBytesFromString(fileName, charset).length;
   }
 }

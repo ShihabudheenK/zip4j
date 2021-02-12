@@ -3,6 +3,8 @@ package net.lingala.zip4j.tasks;
 import net.lingala.zip4j.io.inputstream.SplitInputStream;
 import net.lingala.zip4j.io.inputstream.ZipInputStream;
 import net.lingala.zip4j.model.FileHeader;
+import net.lingala.zip4j.model.UnzipParameters;
+import net.lingala.zip4j.model.Zip4jConfig;
 import net.lingala.zip4j.model.ZipModel;
 import net.lingala.zip4j.progress.ProgressMonitor;
 import net.lingala.zip4j.tasks.ExtractFileTask.ExtractFileTaskParameters;
@@ -11,7 +13,6 @@ import net.lingala.zip4j.util.UnzipUtil;
 import net.lingala.zip4j.util.Zip4jUtil;
 
 import java.io.IOException;
-import java.nio.charset.Charset;
 import java.util.Collections;
 import java.util.List;
 
@@ -23,8 +24,9 @@ public class ExtractFileTask extends AbstractExtractFileTask<ExtractFileTaskPara
   private char[] password;
   private SplitInputStream splitInputStream;
 
-  public ExtractFileTask(ZipModel zipModel, char[] password, AsyncTaskParameters asyncTaskParameters) {
-    super(zipModel, asyncTaskParameters);
+  public ExtractFileTask(ZipModel zipModel, char[] password, UnzipParameters unzipParameters,
+                         AsyncTaskParameters asyncTaskParameters) {
+    super(zipModel, unzipParameters, asyncTaskParameters);
     this.password = password;
   }
 
@@ -32,11 +34,13 @@ public class ExtractFileTask extends AbstractExtractFileTask<ExtractFileTaskPara
   protected void executeTask(ExtractFileTaskParameters taskParameters, ProgressMonitor progressMonitor)
       throws IOException {
 
-    try(ZipInputStream zipInputStream = createZipInputStream(taskParameters.fileHeader, taskParameters.charset)) {
+    try(ZipInputStream zipInputStream =
+            createZipInputStream(taskParameters.fileHeader, taskParameters.zip4jConfig)) {
       List<FileHeader> fileHeadersUnderDirectory = getFileHeadersToExtract(taskParameters.fileHeader);
+      byte[] readBuff = new byte[taskParameters.zip4jConfig.getBufferSize()];
       for (FileHeader fileHeader : fileHeadersUnderDirectory) {
         String newFileName = determineNewFileName(taskParameters.newFileName, taskParameters.fileHeader, fileHeader);
-        extractFile(zipInputStream, fileHeader, taskParameters.outputPath, newFileName, progressMonitor);
+        extractFile(zipInputStream, fileHeader, taskParameters.outputPath, newFileName, progressMonitor, readBuff);
       }
     } finally {
       if (splitInputStream != null) {
@@ -60,13 +64,14 @@ public class ExtractFileTask extends AbstractExtractFileTask<ExtractFileTaskPara
         getZipModel().getCentralDirectory().getFileHeaders(), rootFileHeader);
   }
 
-  private ZipInputStream createZipInputStream(FileHeader fileHeader, Charset charset) throws IOException {
+  private ZipInputStream createZipInputStream(FileHeader fileHeader, Zip4jConfig zip4jConfig) throws IOException {
     splitInputStream = UnzipUtil.createSplitInputStream(getZipModel());
     splitInputStream.prepareExtractionForFileHeader(fileHeader);
-    return new ZipInputStream(splitInputStream, password, charset);
+    return new ZipInputStream(splitInputStream, password, zip4jConfig);
   }
 
-  private String determineNewFileName(String newFileName, FileHeader fileHeaderToExtract, FileHeader fileHeaderBeingExtracted) {
+  private String determineNewFileName(String newFileName, FileHeader fileHeaderToExtract,
+                                      FileHeader fileHeaderBeingExtracted) {
     if (!Zip4jUtil.isStringNotNullAndNotEmpty(newFileName)) {
       return newFileName;
     }
@@ -89,8 +94,9 @@ public class ExtractFileTask extends AbstractExtractFileTask<ExtractFileTaskPara
     private FileHeader fileHeader;
     private String newFileName;
 
-    public ExtractFileTaskParameters(String outputPath, FileHeader fileHeader, String newFileName, Charset charset) {
-      super(charset);
+    public ExtractFileTaskParameters(String outputPath, FileHeader fileHeader, String newFileName,
+                                     Zip4jConfig zip4jConfig) {
+      super(zip4jConfig);
       this.outputPath = outputPath;
       this.fileHeader = fileHeader;
       this.newFileName = newFileName;

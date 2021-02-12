@@ -6,6 +6,7 @@ import net.lingala.zip4j.headers.HeaderWriter;
 import net.lingala.zip4j.io.outputstream.SplitOutputStream;
 import net.lingala.zip4j.model.EndOfCentralDirectoryRecord;
 import net.lingala.zip4j.model.FileHeader;
+import net.lingala.zip4j.model.Zip4jConfig;
 import net.lingala.zip4j.model.ZipModel;
 import net.lingala.zip4j.model.enums.RandomAccessFileMode;
 import net.lingala.zip4j.progress.ProgressMonitor;
@@ -14,7 +15,6 @@ import net.lingala.zip4j.tasks.RemoveFilesFromZipTask.RemoveFilesFromZipTaskPara
 import java.io.File;
 import java.io.IOException;
 import java.io.RandomAccessFile;
-import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -49,12 +49,12 @@ public class RemoveFilesFromZipTask extends AbstractModifyFileTask<RemoveFilesFr
          RandomAccessFile inputStream = new RandomAccessFile(zipModel.getZipFile(), RandomAccessFileMode.READ.getValue())){
 
       long currentFileCopyPointer = 0;
-      List<FileHeader> allUnchangedFileHeaders = new ArrayList<>(zipModel.getCentralDirectory().getFileHeaders());
+      List<FileHeader> sortedFileHeaders = cloneAndSortFileHeadersByOffset(zipModel.getCentralDirectory().getFileHeaders());
 
-      for (FileHeader fileHeader : allUnchangedFileHeaders) {
-        long lengthOfCurrentEntry = HeaderUtil.getOffsetOfNextEntry(zipModel, fileHeader) - outputStream.getFilePointer();
+      for (FileHeader fileHeader : sortedFileHeaders) {
+        long lengthOfCurrentEntry = getOffsetOfNextEntry(sortedFileHeaders, fileHeader, zipModel) - outputStream.getFilePointer();
         if (shouldEntryBeRemoved(fileHeader, entriesToRemove)) {
-          updateHeaders(fileHeader, lengthOfCurrentEntry);
+          updateHeaders(sortedFileHeaders, fileHeader, lengthOfCurrentEntry);
 
           if (!zipModel.getCentralDirectory().getFileHeaders().remove(fileHeader)) {
             throw new ZipException("Could not remove entry from list of central directory headers");
@@ -63,12 +63,13 @@ public class RemoveFilesFromZipTask extends AbstractModifyFileTask<RemoveFilesFr
           currentFileCopyPointer += lengthOfCurrentEntry;
         } else {
           // copy complete entry without any changes
-          currentFileCopyPointer += super.copyFile(inputStream, outputStream, currentFileCopyPointer, lengthOfCurrentEntry, progressMonitor);
+          currentFileCopyPointer += super.copyFile(inputStream, outputStream, currentFileCopyPointer,
+              lengthOfCurrentEntry, progressMonitor, taskParameters.zip4jConfig.getBufferSize());
         }
         verifyIfTaskIsCancelled();
       }
 
-      headerWriter.finalizeZipFile(zipModel, outputStream, taskParameters.charset);
+      headerWriter.finalizeZipFile(zipModel, outputStream, taskParameters.zip4jConfig.getCharset());
       successFlag = true;
     } finally {
       cleanupFile(successFlag, zipModel.getZipFile(), temporaryZipFile);
@@ -102,8 +103,9 @@ public class RemoveFilesFromZipTask extends AbstractModifyFileTask<RemoveFilesFr
     return false;
   }
 
-  private void updateHeaders(FileHeader fileHeaderThatWasRemoved, long offsetToSubtract) throws ZipException {
-    updateOffsetsForAllSubsequentFileHeaders(zipModel, fileHeaderThatWasRemoved, negate(offsetToSubtract));
+  private void updateHeaders(List<FileHeader> sortedFileHeaders, FileHeader fileHeaderThatWasRemoved,
+                             long offsetToSubtract) throws ZipException {
+    updateOffsetsForAllSubsequentFileHeaders(sortedFileHeaders, zipModel, fileHeaderThatWasRemoved, negate(offsetToSubtract));
 
     EndOfCentralDirectoryRecord endOfCentralDirectoryRecord = zipModel.getEndOfCentralDirectoryRecord();
     endOfCentralDirectoryRecord.setOffsetOfStartOfCentralDirectory(
@@ -144,8 +146,8 @@ public class RemoveFilesFromZipTask extends AbstractModifyFileTask<RemoveFilesFr
   public static class RemoveFilesFromZipTaskParameters extends AbstractZipTaskParameters {
     private List<String> filesToRemove;
 
-    public RemoveFilesFromZipTaskParameters(List<String> filesToRemove, Charset charset) {
-      super(charset);
+    public RemoveFilesFromZipTaskParameters(List<String> filesToRemove, Zip4jConfig zip4jConfig) {
+      super(zip4jConfig);
       this.filesToRemove = filesToRemove;
     }
   }

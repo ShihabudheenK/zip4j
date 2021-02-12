@@ -3,6 +3,7 @@ package net.lingala.zip4j;
 import net.lingala.zip4j.exception.ZipException;
 import net.lingala.zip4j.io.inputstream.ZipInputStream;
 import net.lingala.zip4j.model.FileHeader;
+import net.lingala.zip4j.model.UnzipParameters;
 import net.lingala.zip4j.model.ZipParameters;
 import net.lingala.zip4j.model.enums.AesKeyStrength;
 import net.lingala.zip4j.model.enums.CompressionMethod;
@@ -135,6 +136,25 @@ public class ExtractZipFileIT extends AbstractIT {
   }
 
   @Test
+  public void testExtractAllSkipsSymlinksWhenSymlinkExtractionSetToFalse() throws IOException {
+    ZipFile zipFile = createZipFileWithASymlink(createSymlink());
+
+    zipFile.extractAll(outputFolder.getPath(), buildUnzipParameters(false));
+
+    ZipFileVerifier.verifyFolderContentsSameAsSourceFiles(outputFolder);
+    verifyNumberOfFilesInOutputFolder(outputFolder, 4);
+  }
+
+  @Test
+  public void testExtractAllExtractsSymlinksWhenSymlinkExtractionSetToTrue() throws IOException {
+    ZipFile zipFile = createZipFileWithASymlink(createSymlink());
+
+    zipFile.extractAll(outputFolder.getPath(), buildUnzipParameters(true));
+
+    verifyNumberOfFilesInOutputFolder(outputFolder, 5);
+  }
+
+  @Test
   public void testExtractFileWithFileHeaderWithAes128() throws IOException {
     ZipParameters zipParameters = createZipParameters(EncryptionMethod.AES, AesKeyStrength.KEY_STRENGTH_128);
     ZipFile zipFile = new ZipFile(generatedZipFile, PASSWORD);
@@ -176,6 +196,55 @@ public class ExtractZipFileIT extends AbstractIT {
   }
 
   @Test
+  public void testExtractFileWithFileHeaderDoesNotExtractSymlinkWhenSymlinkExtractionIsNotSet() throws IOException {
+    File symlink = createSymlink();
+    ZipFile zipFile = createZipFileWithASymlink(symlink);
+
+    FileHeader fileHeader = zipFile.getFileHeader(symlink.getName());
+    zipFile.extractFile(fileHeader, outputFolder.getPath(), buildUnzipParameters(false));
+
+    assertThat(outputFolder.listFiles()).isNull();
+  }
+
+  @Test
+  public void testExtractFileWithFileHeaderExtractsSymlinkWhenSymlinkExtractionIsSet() throws IOException {
+    File symlink = createSymlink();
+    ZipFile zipFile = createZipFileWithASymlink(symlink);
+
+    FileHeader fileHeader = zipFile.getFileHeader(symlink.getName());
+    zipFile.extractFile(fileHeader, outputFolder.getPath(), buildUnzipParameters(true));
+
+    verifyNumberOfFilesInOutputFolder(outputFolder, 1);
+    assertThat(outputFolder.listFiles()[0].getName()).isEqualTo(symlink.getName());
+  }
+
+  @Test
+  public void testExtractFileWithFileHeaderAndNewFileDoesNotExtractSymlinkWhenSymlinkExtractionIsNotSet()
+      throws IOException {
+    File symlink = createSymlink();
+    ZipFile zipFile = createZipFileWithASymlink(symlink);
+
+    FileHeader fileHeader = zipFile.getFileHeader(symlink.getName());
+    zipFile.extractFile(fileHeader, outputFolder.getPath(), "newFileName", buildUnzipParameters(false));
+
+    assertThat(outputFolder.listFiles()).isNull();
+  }
+
+  @Test
+  public void testExtractFileWithFileHeaderAndNewFileNameExtractsSymlinkWhenSymlinkExtractionIsSet()
+      throws IOException {
+    File symlink = createSymlink();
+    ZipFile zipFile = createZipFileWithASymlink(symlink);
+
+    FileHeader fileHeader = zipFile.getFileHeader(symlink.getName());
+    String newFileName = "newName.link";
+    zipFile.extractFile(fileHeader, outputFolder.getPath(), newFileName, buildUnzipParameters(true));
+
+    verifyNumberOfFilesInOutputFolder(outputFolder, 1);
+    assertThat(outputFolder.listFiles()[0].getName()).isEqualTo(newFileName);
+  }
+
+  @Test
   public void testExtractFileWithFileNameThrowsExceptionWhenFileNotFound() throws ZipException {
     ZipFile zipFile = new ZipFile(generatedZipFile, PASSWORD);
     zipFile.addFiles(FILES_TO_ADD);
@@ -214,6 +283,50 @@ public class ExtractZipFileIT extends AbstractIT {
 
     File outputFile = getFileWithNameFrom(outputFolder, newFileName);
     ZipFileVerifier.verifyFileContent(getTestFileFromResources("sample_directory/favicon.ico"), outputFile);
+  }
+
+  @Test
+  public void testExtractFileWithFileNameDoesNotExtractSymlinkWhenSymlinkExtractionIsNotSet() throws IOException {
+    File symlink = createSymlink();
+    ZipFile zipFile = createZipFileWithASymlink(symlink);
+
+    zipFile.extractFile(symlink.getName(), outputFolder.getPath(), buildUnzipParameters(false));
+
+    assertThat(outputFolder.listFiles()).isNull();
+  }
+
+  @Test
+  public void testExtractFileWithFileNameExtractsSymlinkWhenSymlinkExtractionIsSet() throws IOException {
+    File symlink = createSymlink();
+    ZipFile zipFile = createZipFileWithASymlink(symlink);
+
+    zipFile.extractFile(symlink.getName(), outputFolder.getPath(), buildUnzipParameters(true));
+
+    verifyNumberOfFilesInOutputFolder(outputFolder, 1);
+    assertThat(outputFolder.listFiles()[0].getName()).isEqualTo(symlink.getName());
+  }
+
+  @Test
+  public void testExtractFileWithFileNameAndNewFileNameDoesNotExtractSymlinkWhenSymlinkExtractionIsNotSet()
+      throws IOException {
+    File symlink = createSymlink();
+    ZipFile zipFile = createZipFileWithASymlink(symlink);
+
+    zipFile.extractFile(symlink.getName(), outputFolder.getPath(), "newFileName", buildUnzipParameters(false));
+
+    assertThat(outputFolder.listFiles()).isNull();
+  }
+
+  @Test
+  public void testExtractFileWithFileNameAndNewFileNameExtractsSymlinkWhenSymlinkExtractionIsSet() throws IOException {
+    File symlink = createSymlink();
+    ZipFile zipFile = createZipFileWithASymlink(symlink);
+
+    String newFileName = "newName.link";
+    zipFile.extractFile(symlink.getName(), outputFolder.getPath(), newFileName, buildUnzipParameters(true));
+
+    verifyNumberOfFilesInOutputFolder(outputFolder, 1);
+    assertThat(outputFolder.listFiles()[0].getName()).isEqualTo(newFileName);
   }
 
   @Test
@@ -485,6 +598,50 @@ public class ExtractZipFileIT extends AbstractIT {
     extractFile(TestUtils.getTestArchiveFromResources("jar-dir-lfh-and-fh-entry-size-2.jar"));
   }
 
+  @Test
+  public void testExtractZipStrongEncryptionThrowsException() throws IOException {
+    ZipFile zipFile = new ZipFile(getTestArchiveFromResources("strong_encrypted.zip"), "12345678".toCharArray());
+    expectedException.expect(ZipException.class);
+    expectedException.expectMessage("Entry with name test.txt is encrypted with Strong Encryption. " +
+        "Zip4j does not support Strong Encryption, as this is patented.");
+
+    zipFile.extractAll(outputFolder.getPath());
+  }
+
+  @Test
+  public void testExtractAllWithCustomBufferSize() throws IOException {
+    ZipFile zipFile = new ZipFile(generatedZipFile);
+    ZipParameters zipParameters = new ZipParameters();
+    zipParameters.setIncludeRootFolder(false);
+    zipFile.addFolder(getTestFileFromResources(""), zipParameters);
+    zipFile.setBufferSize(32 * 1024);
+
+    zipFile.extractAll(outputFolder.getPath());
+
+    ZipFileVerifier.verifyFolderContentsSameAsSourceFiles(outputFolder);
+    verifyNumberOfFilesInOutputFolder(outputFolder, 10);
+  }
+
+  @Test
+  public void testExtractingZipStandardEncryptedZipOverLoopAlwaysThrowsWrongPasswordTypeException() throws IOException {
+    for (int i = 0; i < 1000; i++) {
+      if (generatedZipFile.exists() && !generatedZipFile.delete()) {
+        throw new RuntimeException("Could not delete test zip file");
+      }
+
+      ZipFile zipFile = new ZipFile(generatedZipFile, "password".toCharArray());
+      addFileToZip(zipFile, "sample.pdf", EncryptionMethod.ZIP_STANDARD, "password");
+
+      try {
+        zipFile = new ZipFile(generatedZipFile, "WRONG_password".toCharArray());
+        zipFile.extractAll(outputFolder.getPath());
+      } catch (ZipException e) {
+        assertThat(e).isNotNull();
+        assertThat(e.getType()).isEqualTo(ZipException.Type.WRONG_PASSWORD);
+      }
+    }
+  }
+
   private void addFileToZip(ZipFile zipFile, String fileName, EncryptionMethod encryptionMethod, String password) throws ZipException {
     ZipParameters zipParameters = new ZipParameters();
     zipParameters.setEncryptFiles(encryptionMethod != null);
@@ -575,5 +732,25 @@ public class ExtractZipFileIT extends AbstractIT {
   private void extractFile(File fileToExtract) throws IOException {
     ZipFile zipFile = new ZipFile(fileToExtract);
     zipFile.extractAll(outputFolder.getPath());
+  }
+
+  private ZipFile createZipFileWithASymlink(File symlink) throws IOException {
+    ZipFile zipFile = new ZipFile(generatedZipFile);
+    ZipParameters zipParameters = new ZipParameters();
+    zipParameters.setSymbolicLinkAction(ZipParameters.SymbolicLinkAction.INCLUDE_LINK_AND_LINKED_FILE);
+    zipFile.addFiles(FILES_TO_ADD, zipParameters);
+    zipFile.addFile(symlink, zipParameters);
+    return zipFile;
+  }
+
+  private UnzipParameters buildUnzipParameters(boolean extractSymlinks) {
+    UnzipParameters unzipParameters = new UnzipParameters();
+    unzipParameters.setExtractSymbolicLinks(extractSymlinks);
+    return unzipParameters;
+  }
+
+  private File createSymlink() throws IOException {
+    File targetFile = getTestFileFromResources("file_PDF_1MB.pdf");
+    return TestUtils.createSymlink(targetFile, temporaryFolder.getRoot());
   }
 }

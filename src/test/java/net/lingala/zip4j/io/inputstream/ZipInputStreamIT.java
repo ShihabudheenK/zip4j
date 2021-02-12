@@ -2,30 +2,54 @@ package net.lingala.zip4j.io.inputstream;
 
 import net.lingala.zip4j.AbstractIT;
 import net.lingala.zip4j.ZipFile;
+import net.lingala.zip4j.exception.ZipException;
 import net.lingala.zip4j.model.LocalFileHeader;
+import net.lingala.zip4j.model.Zip4jConfig;
 import net.lingala.zip4j.model.ZipParameters;
 import net.lingala.zip4j.model.enums.AesKeyStrength;
 import net.lingala.zip4j.model.enums.AesVersion;
 import net.lingala.zip4j.model.enums.CompressionMethod;
 import net.lingala.zip4j.model.enums.EncryptionMethod;
 import net.lingala.zip4j.util.InternalZipConstants;
+import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.ExpectedException;
 
+import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Random;
 import java.util.Set;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 
 import static net.lingala.zip4j.testutils.TestUtils.getTestFileFromResources;
 import static net.lingala.zip4j.testutils.ZipFileVerifier.verifyFileContent;
+import static net.lingala.zip4j.util.InternalZipConstants.MIN_BUFF_SIZE;
 import static org.assertj.core.api.Assertions.assertThat;
 
 public class ZipInputStreamIT extends AbstractIT {
+
+  @Rule
+  public ExpectedException expectedException = ExpectedException.none();
+
+  @Test
+  public void testZipInputStreamConstructorThrowsExceptionWhenBufferSizeIsLessThanExpected() {
+    InputStream inputStream = new ByteArrayInputStream(new byte[1]);
+    Zip4jConfig zip4jConfig = new Zip4jConfig(null, InternalZipConstants.MIN_BUFF_SIZE - 1);
+
+    expectedException.expect(IllegalArgumentException.class);
+    expectedException.expectMessage("Buffer size cannot be less than " + MIN_BUFF_SIZE + " bytes");
+
+    new ZipInputStream(inputStream, null, zip4jConfig);
+  }
 
   @Test
   public void testExtractStoreWithoutEncryption() throws IOException {
@@ -199,6 +223,37 @@ public class ZipInputStreamIT extends AbstractIT {
     }
   }
 
+  @Test
+  public void testExtractZipStrongEncryptionThrowsException() throws IOException {
+    expectedException.expect(ZipException.class);
+    expectedException.expectMessage("Entry [test.txt] Strong Encryption not supported");
+
+    File strongEncryptionFile = getTestArchiveFromResources("strong_encrypted.zip");
+    try (ZipInputStream zipInputStream = new ZipInputStream(new FileInputStream(strongEncryptionFile))) {
+      zipInputStream.getNextEntry();
+    }
+  }
+
+  @Test
+  public void testReadingZipBySkippingDataCreatedWithJDKZipReadsAllEntries() throws IOException {
+    List<File> filesToAdd = new ArrayList<>();
+    // Add a directory first, then a few files, then a directory, and then a file to test all possibilities
+    filesToAdd.add(getTestFileFromResources("sample_directory"));
+    filesToAdd.addAll(FILES_TO_ADD);
+    filesToAdd.add(getTestFileFromResources("öüäöäö"));
+    filesToAdd.add(getTestFileFromResources("file_PDF_1MB.pdf"));
+    File generatedZipFile = createZipFileWithJdkZip(filesToAdd, getTestFileFromResources(""));
+
+    int totalNumberOfEntriesRead = 0;
+    try (ZipInputStream zipInputStream = new ZipInputStream(new FileInputStream(generatedZipFile))) {
+      while (zipInputStream.getNextEntry() != null) {
+        totalNumberOfEntriesRead++;
+      }
+    }
+
+    assertThat(totalNumberOfEntriesRead).isEqualTo(6);
+  }
+
   private void extractZipFileWithInputStreams(File zipFile, char[] password) throws IOException {
     extractZipFileWithInputStreams(zipFile, password, 4096, AesVersion.TWO);
   }
@@ -277,5 +332,26 @@ public class ZipInputStreamIT extends AbstractIT {
         throw new RuntimeException("Could not delete an existing zip file");
       }
     }
+  }
+
+  private File createZipFileWithJdkZip(List<File> filesToAdd, File rootFolder) throws IOException {
+    int readLen;
+    byte[] readBuffer = new byte[InternalZipConstants.BUFF_SIZE];
+    try(ZipOutputStream zipOutputStream = new ZipOutputStream(new FileOutputStream(generatedZipFile))) {
+      for (File fileToAdd : filesToAdd) {
+        String path = rootFolder.toPath().relativize(fileToAdd.toPath()).toString().replaceAll("\\\\", "/");
+        ZipEntry entry = new ZipEntry(path);
+        zipOutputStream.putNextEntry(entry);
+        if (!fileToAdd.isDirectory()) {
+          try (InputStream fis = new FileInputStream(fileToAdd)) {
+            while ((readLen = fis.read(readBuffer)) != -1) {
+              zipOutputStream.write(readBuffer, 0, readLen);
+            }
+          }
+        }
+        zipOutputStream.closeEntry();
+      }
+    }
+    return generatedZipFile;
   }
 }

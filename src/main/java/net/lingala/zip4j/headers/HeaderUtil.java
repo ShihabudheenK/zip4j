@@ -11,7 +11,8 @@ import java.util.Collections;
 import java.util.List;
 import java.util.stream.Collectors;
 
-import static net.lingala.zip4j.util.InternalZipConstants.ZIP_STANDARD_CHARSET;
+import static net.lingala.zip4j.util.InternalZipConstants.ZIP4J_DEFAULT_CHARSET;
+import static net.lingala.zip4j.util.InternalZipConstants.ZIP_STANDARD_CHARSET_NAME;
 import static net.lingala.zip4j.util.Zip4jUtil.isStringNotNullAndNotEmpty;
 
 public class HeaderUtil {
@@ -32,65 +33,28 @@ public class HeaderUtil {
     return fileHeader;
   }
 
-  public static int getIndexOfFileHeader(ZipModel zipModel, FileHeader fileHeader) throws ZipException {
-
-    if (zipModel == null || fileHeader == null) {
-      throw new ZipException("input parameters is null, cannot determine index of file header");
-    }
-
-    if (zipModel.getCentralDirectory() == null
-        || zipModel.getCentralDirectory().getFileHeaders() == null
-        || zipModel.getCentralDirectory().getFileHeaders().size() <= 0) {
-      return -1;
-    }
-
-    String fileName = fileHeader.getFileName();
-
-    if (!isStringNotNullAndNotEmpty(fileName)) {
-      throw new ZipException("file name in file header is empty or null, cannot determine index of file header");
-    }
-
-    List<FileHeader> fileHeadersFromCentralDir = zipModel.getCentralDirectory().getFileHeaders();
-    for (int i = 0; i < fileHeadersFromCentralDir.size(); i++) {
-      FileHeader fileHeaderFromCentralDir = fileHeadersFromCentralDir.get(i);
-      String fileNameForHdr = fileHeaderFromCentralDir.getFileName();
-      if (!isStringNotNullAndNotEmpty(fileNameForHdr)) {
-        continue;
-      }
-
-      if (fileName.equalsIgnoreCase(fileNameForHdr)) {
-        return i;
-      }
-    }
-    return -1;
-  }
-
   public static String decodeStringWithCharset(byte[] data, boolean isUtf8Encoded, Charset charset) {
-    if (InternalZipConstants.CHARSET_UTF_8.equals(charset) && !isUtf8Encoded) {
-      try {
-        return new String(data, ZIP_STANDARD_CHARSET);
-      } catch (UnsupportedEncodingException e) {
-        return new String(data);
-      }
-    }
-
-    if(charset != null) {
+    if (charset != null) {
       return new String(data, charset);
     }
 
-    return new String(data, InternalZipConstants.CHARSET_UTF_8);
+    if (isUtf8Encoded) {
+      return new String(data, InternalZipConstants.CHARSET_UTF_8);
+    }
+
+    try {
+      return new String(data, ZIP_STANDARD_CHARSET_NAME);
+    } catch (UnsupportedEncodingException e) {
+      return new String(data);
+    }
   }
 
-
-  public static long getOffsetOfNextEntry(ZipModel zipModel, FileHeader fileHeader) throws ZipException {
-    int indexOfFileHeader = getIndexOfFileHeader(zipModel, fileHeader);
-
-    List<FileHeader> fileHeaders = zipModel.getCentralDirectory().getFileHeaders();
-    if (indexOfFileHeader == fileHeaders.size() - 1) {
-      return getOffsetStartOfCentralDirectory(zipModel);
-    } else {
-      return fileHeaders.get(indexOfFileHeader + 1).getOffsetLocalHeader();
+  public static byte[] getBytesFromString(String string, Charset charset) {
+    if (charset == null) {
+      return string.getBytes(ZIP4J_DEFAULT_CHARSET);
     }
+
+    return string.getBytes(charset);
   }
 
   public static long getOffsetStartOfCentralDirectory(ZipModel zipModel) {

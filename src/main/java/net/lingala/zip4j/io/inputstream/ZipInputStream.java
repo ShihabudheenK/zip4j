@@ -16,7 +16,6 @@
 
 package net.lingala.zip4j.io.inputstream;
 
-import net.lingala.zip4j.crypto.AESDecrypter;
 import net.lingala.zip4j.exception.ZipException;
 import net.lingala.zip4j.headers.HeaderReader;
 import net.lingala.zip4j.headers.HeaderSignature;
@@ -24,6 +23,7 @@ import net.lingala.zip4j.model.DataDescriptor;
 import net.lingala.zip4j.model.ExtraDataRecord;
 import net.lingala.zip4j.model.FileHeader;
 import net.lingala.zip4j.model.LocalFileHeader;
+import net.lingala.zip4j.model.Zip4jConfig;
 import net.lingala.zip4j.model.enums.AesVersion;
 import net.lingala.zip4j.model.enums.CompressionMethod;
 import net.lingala.zip4j.model.enums.EncryptionMethod;
@@ -35,8 +35,8 @@ import java.io.PushbackInputStream;
 import java.nio.charset.Charset;
 import java.util.List;
 import java.util.zip.CRC32;
-import java.util.zip.DataFormatException;
 
+import static net.lingala.zip4j.util.InternalZipConstants.MIN_BUFF_SIZE;
 import static net.lingala.zip4j.util.Zip4jUtil.getCompressionMethod;
 
 public class ZipInputStream extends InputStream {
@@ -49,10 +49,10 @@ public class ZipInputStream extends InputStream {
   private CRC32 crc32 = new CRC32();
   private byte[] endOfEntryBuffer;
   private boolean canSkipExtendedLocalFileHeader = false;
-  private Charset charset;
+  private Zip4jConfig zip4jConfig;
 
   public ZipInputStream(InputStream inputStream) {
-    this(inputStream, null, InternalZipConstants.CHARSET_UTF_8);
+    this(inputStream, null, (Charset) null);
   }
 
   public ZipInputStream(InputStream inputStream, Charset charset) {
@@ -60,17 +60,21 @@ public class ZipInputStream extends InputStream {
   }
 
   public ZipInputStream(InputStream inputStream, char[] password) {
-    this(inputStream, password, InternalZipConstants.CHARSET_UTF_8);
+    this(inputStream, password, (Charset) null);
   }
 
   public ZipInputStream(InputStream inputStream, char[] password, Charset charset) {
-    if(charset == null) {
-      charset = InternalZipConstants.CHARSET_UTF_8;
+    this(inputStream, password, new Zip4jConfig(charset, InternalZipConstants.BUFF_SIZE));
+  }
+
+  public ZipInputStream(InputStream inputStream, char[] password, Zip4jConfig zip4jConfig) {
+    if (zip4jConfig.getBufferSize() < InternalZipConstants.MIN_BUFF_SIZE) {
+      throw new IllegalArgumentException("Buffer size cannot be less than " + MIN_BUFF_SIZE + " bytes");
     }
 
-    this.inputStream = new PushbackInputStream(inputStream, InternalZipConstants.BUFF_SIZE);
+    this.inputStream = new PushbackInputStream(inputStream, zip4jConfig.getBufferSize());
     this.password = password;
-    this.charset = charset;
+    this.zip4jConfig = zip4jConfig;
   }
 
   public LocalFileHeader getNextEntry() throws IOException {
@@ -82,7 +86,7 @@ public class ZipInputStream extends InputStream {
       readUntilEndOfEntry();
     }
 
-    localFileHeader = headerReader.readLocalFileHeader(inputStream, charset);
+    localFileHeader = headerReader.readLocalFileHeader(inputStream, zip4jConfig.getCharset());
 
     if (localFileHeader == null) {
       return null;
@@ -95,6 +99,10 @@ public class ZipInputStream extends InputStream {
       localFileHeader.setCrc(fileHeader.getCrc());
       localFileHeader.setCompressedSize(fileHeader.getCompressedSize());
       localFileHeader.setUncompressedSize(fileHeader.getUncompressedSize());
+      // file header's directory flag is more reliable than local file header's directory flag as file header has
+      // additional external file attributes which has a directory flag defined. In local file header, the only way
+      // to determine if an entry is directory is to check if the file name has a trailing forward slash "/"
+      localFileHeader.setDirectory(fileHeader.isDirectory());
       canSkipExtendedLocalFileHeader = true;
     } else {
       canSkipExtendedLocalFileHeader = false;
@@ -148,8 +156,7 @@ public class ZipInputStream extends InputStream {
 
       return readLen;
     } catch (IOException e) {
-      if (e.getCause() != null && e.getCause() instanceof DataFormatException
-          && isEncryptionMethodZipStandard(localFileHeader)) {
+      if (isEncryptionMethodZipStandard(localFileHeader)) {
         throw new ZipException(e.getMessage(), e.getCause(), ZipException.Type.WRONG_PASSWORD);
       }
 
@@ -162,10 +169,6 @@ public class ZipInputStream extends InputStream {
     if (decompressedInputStream != null) {
       decompressedInputStream.close();
     }
-  }
-
-  public int getAvailableBytesInPushBackInputStream() throws IOException {
-    return inputStream.available();
   }
 
   private void endOfCompressedDataReached() throws IOException {
@@ -187,23 +190,28 @@ public class ZipInputStream extends InputStream {
     return initializeDecompressorForThisEntry(cipherInputStream, localFileHeader);
   }
 
-  private CipherInputStream initializeCipherInputStream(ZipEntryInputStream zipEntryInputStream, LocalFileHeader localFileHeader) throws IOException {
+  private CipherInputStream initializeCipherInputStream(ZipEntryInputStream zipEntryInputStream,
+                                                        LocalFileHeader localFileHeader) throws IOException {
     if (!localFileHeader.isEncrypted()) {
-      return new NoCipherInputStream(zipEntryInputStream, localFileHeader, password);
+      return new NoCipherInputStream(zipEntryInputStream, localFileHeader, password, zip4jConfig.getBufferSize());
     }
 
     if (localFileHeader.getEncryptionMethod() == EncryptionMethod.AES) {
-      return new AesCipherInputStream(zipEntryInputStream, localFileHeader, password);
+      return new AesCipherInputStream(zipEntryInputStream, localFileHeader, password, zip4jConfig.getBufferSize());
+    } else if (localFileHeader.getEncryptionMethod() == EncryptionMethod.ZIP_STANDARD) {
+      return new ZipStandardCipherInputStream(zipEntryInputStream, localFileHeader, password, zip4jConfig.getBufferSize());
     } else {
-      return new ZipStandardCipherInputStream(zipEntryInputStream, localFileHeader, password);
+      final String message = String.format("Entry [%s] Strong Encryption not supported", localFileHeader.getFileName());
+      throw new ZipException(message, ZipException.Type.UNSUPPORTED_ENCRYPTION);
     }
   }
 
-  private DecompressedInputStream initializeDecompressorForThisEntry(CipherInputStream cipherInputStream, LocalFileHeader localFileHeader) {
+  private DecompressedInputStream initializeDecompressorForThisEntry(CipherInputStream cipherInputStream,
+                                                                     LocalFileHeader localFileHeader) {
     CompressionMethod compressionMethod = getCompressionMethod(localFileHeader);
 
     if (compressionMethod == CompressionMethod.DEFLATE) {
-      return new InflaterInputStream(cipherInputStream);
+      return new InflaterInputStream(cipherInputStream, zip4jConfig.getBufferSize());
     }
 
     return new StoreInputStream(cipherInputStream);
@@ -290,7 +298,7 @@ public class ZipInputStream extends InputStream {
     }
 
     if (localFileHeader.getEncryptionMethod().equals(EncryptionMethod.AES)) {
-      return InternalZipConstants.AES_AUTH_LENGTH + AESDecrypter.PASSWORD_VERIFIER_LENGTH
+      return InternalZipConstants.AES_AUTH_LENGTH + InternalZipConstants.AES_PASSWORD_VERIFIER_LENGTH
           + localFileHeader.getAesExtraDataRecord().getAesKeyStrength().getSaltLength();
     } else if (localFileHeader.getEncryptionMethod().equals(EncryptionMethod.ZIP_STANDARD)) {
       return InternalZipConstants.STD_DEC_HDR_SIZE;
@@ -300,7 +308,8 @@ public class ZipInputStream extends InputStream {
   }
 
   private void readUntilEndOfEntry() throws IOException {
-    if (localFileHeader.isDirectory() || localFileHeader.getCompressedSize() == 0) {
+    if (localFileHeader.isDirectory()
+        || (localFileHeader.getCompressedSize() == 0 && !localFileHeader.isDataDescriptorExists())) {
       return;
     }
 

@@ -4,8 +4,19 @@ import net.lingala.zip4j.AbstractIT;
 import net.lingala.zip4j.exception.ZipException;
 import net.lingala.zip4j.io.outputstream.CountingOutputStream;
 import net.lingala.zip4j.io.outputstream.SplitOutputStream;
-import net.lingala.zip4j.model.*;
-import net.lingala.zip4j.model.enums.*;
+import net.lingala.zip4j.model.AESExtraDataRecord;
+import net.lingala.zip4j.model.CentralDirectory;
+import net.lingala.zip4j.model.DataDescriptor;
+import net.lingala.zip4j.model.ExtraDataRecord;
+import net.lingala.zip4j.model.FileHeader;
+import net.lingala.zip4j.model.LocalFileHeader;
+import net.lingala.zip4j.model.Zip64ExtendedInfo;
+import net.lingala.zip4j.model.ZipModel;
+import net.lingala.zip4j.model.enums.AesKeyStrength;
+import net.lingala.zip4j.model.enums.AesVersion;
+import net.lingala.zip4j.model.enums.CompressionMethod;
+import net.lingala.zip4j.model.enums.EncryptionMethod;
+import net.lingala.zip4j.model.enums.RandomAccessFileMode;
 import net.lingala.zip4j.util.BitUtils;
 import net.lingala.zip4j.util.InternalZipConstants;
 import net.lingala.zip4j.util.RawIO;
@@ -13,7 +24,13 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.ExpectedException;
 
-import java.io.*;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.io.RandomAccessFile;
 import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.List;
@@ -92,9 +109,9 @@ public class HeaderWriterIT extends AbstractIT {
   }
 
   @Test
-  public void testWriteLocalFileHeaderJapaneseCharactersInFileNameWithoutUtf8ShouldNotMatch()
+  public void testWriteLocalFileHeaderJapaneseCharactersInFileNameWithoutUtf8ShouldMatch()
       throws IOException {
-    testWriteLocalFileHeaderWithFileName("公ゃ的年社", false, false);
+    testWriteLocalFileHeaderWithFileName("公ゃ的年社", false, true);
   }
 
   @Test
@@ -201,7 +218,7 @@ public class HeaderWriterIT extends AbstractIT {
     }
 
     try(RandomAccessFile randomAccessFile = new RandomAccessFile(headersFile, RandomAccessFileMode.READ.getValue())) {
-      ZipModel readZipModel = headerReader.readAllHeaders(randomAccessFile, null);
+      ZipModel readZipModel = headerReader.readAllHeaders(randomAccessFile, buildDefaultConfig());
       verifyZipModel(readZipModel, 10);
 
       for (FileHeader fileHeader : readZipModel.getCentralDirectory().getFileHeaders()) {
@@ -232,7 +249,7 @@ public class HeaderWriterIT extends AbstractIT {
     }
 
     try(RandomAccessFile randomAccessFile = new RandomAccessFile(headersFile, RandomAccessFileMode.READ.getValue())) {
-      ZipModel readZipModel = headerReader.readAllHeaders(randomAccessFile, null);
+      ZipModel readZipModel = headerReader.readAllHeaders(randomAccessFile, buildDefaultConfig());
       verifyZipModel(readZipModel, 10, COMPRESSED_SIZE_ZIP64, UNCOMPRESSED_SIZE_ZIP64, true);
 
       List<FileHeader> fileHeaders = readZipModel.getCentralDirectory().getFileHeaders();
@@ -255,7 +272,7 @@ public class HeaderWriterIT extends AbstractIT {
     }
 
     try(RandomAccessFile randomAccessFile = new RandomAccessFile(headersFile, RandomAccessFileMode.READ.getValue())) {
-      ZipModel readZipModel = headerReader.readAllHeaders(randomAccessFile, null);
+      ZipModel readZipModel = headerReader.readAllHeaders(randomAccessFile, buildDefaultConfig());
       verifyZipModel(readZipModel, 10);
 
       for (FileHeader fileHeader : readZipModel.getCentralDirectory().getFileHeaders()) {
@@ -277,7 +294,7 @@ public class HeaderWriterIT extends AbstractIT {
     }
 
     try(RandomAccessFile randomAccessFile = new RandomAccessFile(headersFile, RandomAccessFileMode.READ.getValue())) {
-      ZipModel readZipModel = headerReader.readAllHeaders(randomAccessFile, null);
+      ZipModel readZipModel = headerReader.readAllHeaders(randomAccessFile, buildDefaultConfig());
       verifyZipModel(readZipModel, 10, COMPRESSED_SIZE_ZIP64, UNCOMPRESSED_SIZE_ZIP64, true);
 
       List<FileHeader> fileHeaders = readZipModel.getCentralDirectory().getFileHeaders();
@@ -299,7 +316,7 @@ public class HeaderWriterIT extends AbstractIT {
     }
 
     try(RandomAccessFile randomAccessFile = new RandomAccessFile(headersFile, RandomAccessFileMode.READ.getValue())) {
-      ZipModel readZipModel = headerReader.readAllHeaders(randomAccessFile, null);
+      ZipModel readZipModel = headerReader.readAllHeaders(randomAccessFile, buildDefaultConfig());
       verifyZipModel(readZipModel, 10, COMPRESSED_SIZE_ZIP64, UNCOMPRESSED_SIZE_ZIP64, true);
 
       List<FileHeader> fileHeaders = readZipModel.getCentralDirectory().getFileHeaders();
@@ -338,7 +355,7 @@ public class HeaderWriterIT extends AbstractIT {
     }
 
     try(RandomAccessFile randomAccessFile = new RandomAccessFile(headersFile, RandomAccessFileMode.READ.getValue())) {
-      ZipModel readZipModel = headerReader.readAllHeaders(randomAccessFile, InternalZipConstants.CHARSET_UTF_8);
+      ZipModel readZipModel = headerReader.readAllHeaders(randomAccessFile, buildDefaultConfig());
       verifyZipModel(readZipModel, 10);
 
       for (FileHeader fileHeader : readZipModel.getCentralDirectory().getFileHeaders()) {
@@ -359,7 +376,7 @@ public class HeaderWriterIT extends AbstractIT {
     }
 
     try(RandomAccessFile randomAccessFile = new RandomAccessFile(headersFile, RandomAccessFileMode.READ.getValue())) {
-      ZipModel readZipModel = headerReader.readAllHeaders(randomAccessFile, InternalZipConstants.CHARSET_UTF_8);
+      ZipModel readZipModel = headerReader.readAllHeaders(randomAccessFile, buildDefaultConfig());
       verifyZipModel(readZipModel, 10, COMPRESSED_SIZE_ZIP64, UNCOMPRESSED_SIZE_ZIP64, true);
 
       List<FileHeader> fileHeaders = readZipModel.getCentralDirectory().getFileHeaders();
@@ -428,7 +445,7 @@ public class HeaderWriterIT extends AbstractIT {
     }
 
     try(RandomAccessFile randomAccessFile = new RandomAccessFile(headersFile, RandomAccessFileMode.READ.getValue())) {
-      ZipModel readZipModel = headerReader.readAllHeaders(randomAccessFile, null);
+      ZipModel readZipModel = headerReader.readAllHeaders(randomAccessFile, buildDefaultConfig());
       verifyZipModel(readZipModel, 10);
 
       for (int i = 0; i < zipModel.getCentralDirectory().getFileHeaders().size(); i++) {

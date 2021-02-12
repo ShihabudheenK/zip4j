@@ -4,22 +4,27 @@ import net.lingala.zip4j.AbstractIT;
 import net.lingala.zip4j.ZipFile;
 import net.lingala.zip4j.exception.ZipException;
 import net.lingala.zip4j.model.FileHeader;
+import net.lingala.zip4j.model.Zip4jConfig;
 import net.lingala.zip4j.model.ZipParameters;
 import net.lingala.zip4j.model.enums.AesKeyStrength;
 import net.lingala.zip4j.model.enums.AesVersion;
 import net.lingala.zip4j.model.enums.CompressionMethod;
 import net.lingala.zip4j.model.enums.EncryptionMethod;
+import net.lingala.zip4j.testutils.TestUtils;
 import net.lingala.zip4j.util.BitUtils;
+import net.lingala.zip4j.util.FileUtils;
 import net.lingala.zip4j.util.InternalZipConstants;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.ExpectedException;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -27,12 +32,27 @@ import java.util.List;
 
 import static net.lingala.zip4j.testutils.TestUtils.getTestFileFromResources;
 import static net.lingala.zip4j.testutils.ZipFileVerifier.verifyZipFileByExtractingAllFiles;
+import static net.lingala.zip4j.util.FileUtils.isMac;
+import static net.lingala.zip4j.util.FileUtils.isUnix;
+import static net.lingala.zip4j.util.FileUtils.isWindows;
+import static net.lingala.zip4j.util.InternalZipConstants.MIN_BUFF_SIZE;
 import static org.assertj.core.api.Assertions.assertThat;
 
 public class ZipOutputStreamIT extends AbstractIT {
 
   @Rule
   public ExpectedException expectedException = ExpectedException.none();
+
+  @Test
+  public void testConstructorThrowsExceptionWhenBufferSizeIsLessThanExpected() throws IOException {
+    OutputStream outputStream = new ByteArrayOutputStream();
+    Zip4jConfig zip4jConfig = new Zip4jConfig(null, InternalZipConstants.MIN_BUFF_SIZE - 1);
+
+    expectedException.expect(IllegalArgumentException.class);
+    expectedException.expectMessage("Buffer size cannot be less than " + MIN_BUFF_SIZE + " bytes");
+
+    new ZipOutputStream(outputStream, null, zip4jConfig, null);
+  }
 
   @Test
   public void testZipOutputStreamStoreWithoutEncryption() throws IOException {
@@ -167,6 +187,38 @@ public class ZipOutputStreamIT extends AbstractIT {
     zos.setComment("SOME_COMMENT");
   }
 
+  @Test
+  public void testDefaultFileAttributes() throws IOException {
+    List<File> filesToAdd = new ArrayList<>(FILES_TO_ADD);
+    filesToAdd.add(TestUtils.getTestFileFromResources("/"));
+    byte[] buff = new byte[4096];
+    int readLen;
+    ZipParameters zipParameters = new ZipParameters();
+
+    try (ZipOutputStream zipOutputStream = new ZipOutputStream(new FileOutputStream(generatedZipFile))) {
+      for (File fileToAdd : filesToAdd) {
+        if (fileToAdd.isDirectory()) {
+          zipParameters.setFileNameInZip(fileToAdd.getName() + "/");
+          zipOutputStream.putNextEntry(zipParameters);
+          zipOutputStream.closeEntry();
+          continue;
+        }
+
+        zipParameters.setFileNameInZip(fileToAdd.getName());
+        zipOutputStream.putNextEntry(zipParameters);
+        InputStream inputStream = new FileInputStream(fileToAdd);
+        while ((readLen = inputStream.read(buff)) != -1) {
+          zipOutputStream.write(buff, 0, readLen);
+        }
+
+        inputStream.close();
+        zipOutputStream.closeEntry();
+      }
+    }
+
+    verifyDefaultFileAttributes();
+  }
+
   private void testZipOutputStream(CompressionMethod compressionMethod, boolean encrypt,
                                    EncryptionMethod encryptionMethod, AesKeyStrength aesKeyStrength,
                                    AesVersion aesVersion)
@@ -178,12 +230,14 @@ public class ZipOutputStreamIT extends AbstractIT {
                                    EncryptionMethod encryptionMethod, AesKeyStrength aesKeyStrength,
                                    AesVersion aesVersion, boolean setLastModifiedTime)
           throws IOException {
-    testZipOutputStream(compressionMethod, encrypt, encryptionMethod, aesKeyStrength, aesVersion, true, FILES_TO_ADD, InternalZipConstants.CHARSET_UTF_8);
+    testZipOutputStream(compressionMethod, encrypt, encryptionMethod, aesKeyStrength, aesVersion, setLastModifiedTime,
+        FILES_TO_ADD, InternalZipConstants.CHARSET_UTF_8);
   }
 
   private void testZipOutputStream(CompressionMethod compressionMethod, boolean encrypt,
                                    EncryptionMethod encryptionMethod, AesKeyStrength aesKeyStrength,
-                                   AesVersion aesVersion, boolean setLastModifiedTime, List<File> filesToAdd, Charset charset)
+                                   AesVersion aesVersion, boolean setLastModifiedTime, List<File> filesToAdd,
+                                   Charset charset)
       throws IOException {
 
     ZipParameters zipParameters = buildZipParameters(compressionMethod, encrypt, encryptionMethod, aesKeyStrength);
@@ -330,6 +384,26 @@ public class ZipOutputStreamIT extends AbstractIT {
   private void verifyZipComment(String expectedComment, Charset charset) throws IOException {
     ZipFile zipFile = initializeZipFileWithCharset(charset);
     assertThat(zipFile.getComment()).isEqualTo(expectedComment);
+  }
+
+  private void verifyDefaultFileAttributes() throws ZipException {
+    ZipFile zipFile = new ZipFile(generatedZipFile);
+    List<FileHeader> fileHeaders = zipFile.getFileHeaders();
+    byte[] emptyAttributes = new byte[4];
+
+    for (FileHeader fileHeader : fileHeaders) {
+      if (isUnix() || isMac()) {
+        if (fileHeader.isDirectory()) {
+          assertThat(fileHeader.getExternalFileAttributes()).isEqualTo(FileUtils.DEFAULT_POSIX_FOLDER_ATTRIBUTES);
+        } else {
+          assertThat(fileHeader.getExternalFileAttributes()).isEqualTo(FileUtils.DEFAULT_POSIX_FILE_ATTRIBUTES);
+        }
+      } else if (isWindows() && fileHeader.isDirectory()) {
+        assertThat(BitUtils.isBitSet(fileHeader.getExternalFileAttributes()[0], 4)).isTrue();
+      } else {
+        assertThat(fileHeader.getExternalFileAttributes()).isEqualTo(emptyAttributes);
+      }
+    }
   }
 
   private ZipFile initializeZipFileWithCharset(Charset charset) {

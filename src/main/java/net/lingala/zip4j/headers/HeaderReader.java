@@ -26,6 +26,7 @@ import net.lingala.zip4j.model.EndOfCentralDirectoryRecord;
 import net.lingala.zip4j.model.ExtraDataRecord;
 import net.lingala.zip4j.model.FileHeader;
 import net.lingala.zip4j.model.LocalFileHeader;
+import net.lingala.zip4j.model.Zip4jConfig;
 import net.lingala.zip4j.model.Zip64EndOfCentralDirectoryLocator;
 import net.lingala.zip4j.model.Zip64EndOfCentralDirectoryRecord;
 import net.lingala.zip4j.model.Zip64ExtendedInfo;
@@ -39,7 +40,6 @@ import net.lingala.zip4j.util.RawIO;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.RandomAccessFile;
-import java.math.BigInteger;
 import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -47,8 +47,8 @@ import java.util.List;
 
 import static net.lingala.zip4j.headers.HeaderUtil.decodeStringWithCharset;
 import static net.lingala.zip4j.util.BitUtils.isBitSet;
-import static net.lingala.zip4j.util.InternalZipConstants.BUFF_SIZE;
 import static net.lingala.zip4j.util.InternalZipConstants.ENDHDR;
+import static net.lingala.zip4j.util.InternalZipConstants.ZIP4J_DEFAULT_CHARSET;
 import static net.lingala.zip4j.util.InternalZipConstants.ZIP_64_NUMBER_OF_ENTRIES_LIMIT;
 import static net.lingala.zip4j.util.InternalZipConstants.ZIP_64_SIZE_LIMIT;
 import static net.lingala.zip4j.util.Zip4jUtil.readFully;
@@ -62,7 +62,7 @@ public class HeaderReader {
   private RawIO rawIO = new RawIO();
   private byte[] intBuff = new byte[4];
 
-  public ZipModel readAllHeaders(RandomAccessFile zip4jRaf, Charset charset) throws IOException {
+  public ZipModel readAllHeaders(RandomAccessFile zip4jRaf, Zip4jConfig zip4jConfig) throws IOException {
 
     if (zip4jRaf.length() < ENDHDR) {
       throw new ZipException("Zip file size less than minimum expected zip file size. " +
@@ -72,8 +72,9 @@ public class HeaderReader {
     zipModel = new ZipModel();
 
     try {
-      zipModel.setEndOfCentralDirectoryRecord(readEndOfCentralDirectoryRecord(zip4jRaf, rawIO, charset));
-    } catch (ZipException e){
+      zipModel.setEndOfCentralDirectoryRecord(
+          readEndOfCentralDirectoryRecord(zip4jRaf, rawIO, zip4jConfig));
+    } catch (ZipException e) {
       throw e;
     } catch (IOException e) {
       throw new ZipException("Zip headers not found. Probably not a zip file or a corrupted zip file", e);
@@ -97,20 +98,20 @@ public class HeaderReader {
       }
     }
 
-    zipModel.setCentralDirectory(readCentralDirectory(zip4jRaf, rawIO, charset));
+    zipModel.setCentralDirectory(readCentralDirectory(zip4jRaf, rawIO, zip4jConfig.getCharset()));
 
     return zipModel;
   }
 
-  private EndOfCentralDirectoryRecord readEndOfCentralDirectoryRecord(RandomAccessFile zip4jRaf, RawIO rawIO, Charset charset)
-      throws IOException {
+  private EndOfCentralDirectoryRecord readEndOfCentralDirectoryRecord(RandomAccessFile zip4jRaf, RawIO rawIO,
+                                                                      Zip4jConfig zip4jConfig) throws IOException {
 
     long offsetEndOfCentralDirectory = zip4jRaf.length() - ENDHDR;
     seekInCurrentPart(zip4jRaf, offsetEndOfCentralDirectory);
     int headerSignature = rawIO.readIntLittleEndian(zip4jRaf);
 
     if (headerSignature != HeaderSignature.END_OF_CENTRAL_DIRECTORY.getValue()) {
-      offsetEndOfCentralDirectory = determineOffsetOfEndOfCentralDirectory(zip4jRaf);
+      offsetEndOfCentralDirectory = determineOffsetOfEndOfCentralDirectory(zip4jRaf, zip4jConfig.getBufferSize());
       zip4jRaf.seek(offsetEndOfCentralDirectory + 4); // 4 to ignore reading signature again
     }
 
@@ -128,7 +129,7 @@ public class HeaderReader {
     endOfCentralDirectoryRecord.setOffsetOfStartOfCentralDirectory(rawIO.readLongLittleEndian(intBuff, 0));
 
     int commentLength = rawIO.readShortLittleEndian(zip4jRaf);
-    endOfCentralDirectoryRecord.setComment(readZipComment(zip4jRaf, commentLength, charset));
+    endOfCentralDirectoryRecord.setComment(readZipComment(zip4jRaf, commentLength, zip4jConfig.getCharset()));
 
     zipModel.setSplitArchive(endOfCentralDirectoryRecord.getNumberOfThisDisk() > 0);
     return endOfCentralDirectoryRecord;
@@ -168,7 +169,6 @@ public class HeaderReader {
 
       zip4jRaf.readFully(intBuff);
       fileHeader.setCrc(rawIO.readLongLittleEndian(intBuff, 0));
-      fileHeader.setCrcRawData(intBuff);
 
       fileHeader.setCompressedSize(rawIO.readLongLittleEndian(zip4jRaf, 4));
       fileHeader.setUncompressedSize(rawIO.readLongLittleEndian(zip4jRaf, 4));
@@ -202,11 +202,11 @@ public class HeaderReader {
         }
 
         fileHeader.setFileName(fileName);
-        fileHeader.setDirectory(fileName.endsWith("/") || fileName.endsWith("\\"));
       } else {
         fileHeader.setFileName(null);
       }
 
+      fileHeader.setDirectory(isDirectory(fileHeader.getExternalFileAttributes(), fileHeader.getFileName()));
       readExtraDataRecords(zip4jRaf, fileHeader);
       readZip64ExtendedInfo(fileHeader, rawIO);
       readAesExtraDataRecord(fileHeader, rawIO);
@@ -548,7 +548,6 @@ public class HeaderReader {
 
     readFully(inputStream, intBuff);
     localFileHeader.setCrc(rawIO.readLongLittleEndian(intBuff, 0));
-    localFileHeader.setCrcRawData(intBuff.clone());
 
     localFileHeader.setCompressedSize(rawIO.readLongLittleEndian(inputStream, 4));
     localFileHeader.setUncompressedSize(rawIO.readLongLittleEndian(inputStream, 4));
@@ -561,9 +560,6 @@ public class HeaderReader {
     if (fileNameLength > 0) {
       byte[] fileNameBuf = new byte[fileNameLength];
       readFully(inputStream, fileNameBuf);
-      // Modified after user reported an issue http://www.lingala.net/zip4j/forum/index.php?topic=2.0
-//				String fileName = new String(fileNameBuf, "Cp850");
-//				String fileName = Zip4jUtil.getCp850EncodedString(fileNameBuf);
       String fileName = decodeStringWithCharset(fileNameBuf, localFileHeader.isFileNameUTF8Encoded(), charset);
 
       if (fileName == null) {
@@ -589,7 +585,7 @@ public class HeaderReader {
       if (localFileHeader.getEncryptionMethod() == EncryptionMethod.AES) {
         //Do nothing
       } else {
-        if (BigInteger.valueOf(localFileHeader.getGeneralPurposeFlag()[0]).testBit(6)) {
+        if (isBitSet(localFileHeader.getGeneralPurposeFlag()[0], 6)) {
           localFileHeader.setEncryptionMethod(EncryptionMethod.ZIP_STANDARD_VARIANT_STRONG);
         } else {
           localFileHeader.setEncryptionMethod(EncryptionMethod.ZIP_STANDARD);
@@ -702,12 +698,14 @@ public class HeaderReader {
     return zipModel.getEndOfCentralDirectoryRecord().getTotalNumberOfEntriesInCentralDirectory();
   }
 
-  private long determineOffsetOfEndOfCentralDirectory(RandomAccessFile randomAccessFile) throws IOException {
-    byte[] buff = new byte[BUFF_SIZE];
+  private long determineOffsetOfEndOfCentralDirectory(RandomAccessFile randomAccessFile, int bufferSize)
+      throws IOException {
+
+    byte[] buff = new byte[bufferSize];
     long currentFilePointer = randomAccessFile.getFilePointer();
 
     do {
-      int toRead = currentFilePointer > BUFF_SIZE ? BUFF_SIZE : (int) currentFilePointer;
+      int toRead = currentFilePointer > bufferSize ? bufferSize : (int) currentFilePointer;
       // read 4 bytes again to make sure that the header is not spilled over
       long seekPosition = currentFilePointer - toRead + 4;
       if (seekPosition == 4) {
@@ -744,10 +742,23 @@ public class HeaderReader {
     try {
       byte[] commentBuf = new byte[commentLength];
       raf.readFully(commentBuf);
-      return new String(commentBuf, charset);
+      return decodeStringWithCharset(commentBuf, false, charset != null ? charset : ZIP4J_DEFAULT_CHARSET);
     } catch (IOException e) {
       // Ignore any exception and set comment to null if comment cannot be read
       return null;
     }
+  }
+
+  public boolean isDirectory(byte[] externalFileAttributes, String fileName) {
+    // first check if DOS attributes are set (lower order bytes from external attributes). If yes, check if the 4th bit
+    // which represents a directory is set. If UNIX attributes are set (higher order two bytes), check for the 6th bit
+    // in 4th byte which  represents a directory flag.
+    if (externalFileAttributes[0] != 0 && isBitSet(externalFileAttributes[0], 4)) {
+      return true;
+    } else if (externalFileAttributes[3] != 0 && isBitSet(externalFileAttributes[3], 6))  {
+      return true;
+    }
+
+    return fileName != null && (fileName.endsWith("/") || fileName.endsWith("\\"));
   }
 }
